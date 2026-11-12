@@ -1,0 +1,12 @@
+# BigWigsMods/packager config. Publishing stays off until Kenny approves and the Wago / CurseForge projects exist (see release.yml).
+package-as: ShadowCount
+
+ignore:
+  - tests
+  - tools
+  - .luacheckrc
+  - media
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown

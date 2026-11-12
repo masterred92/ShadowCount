@@ -1,0 +1,442 @@
+-- Shadow Count: a Nightfall / Shadow Trance counter for Warlocks on WoW: Forever. Written from scratch (MIT).
+--
+-- What the client data says (wago.tools db2, build 1.60.1.70862):
+--   * Nightfall 18094 (Affliction talent) gives Corruption, Drain Soul, Drain Life and Wrack a chance to put you in
+--     Shadow Trance, 17941: "Your next Shadow Bolt becomes an instant cast spell." It lasts 10 seconds (SpellDuration 1).
+--   * The player's Shadow Bolt ranks are 686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661 and 25307
+--     (SkillLineAbility, Destruction 593, Warlock class mask).
+--
+-- How it counts: a Trance is "gained" when the player gains 17941 (cast event or the aura appearing, deduplicated).
+-- It is "spent" when a Shadow Bolt succeeds while the Trance is up and that bolt had no cast bar (no
+-- UNIT_SPELLCAST_START for its cast GUID), which is what an instant Shadow Bolt looks like.
+--
+-- Addons on this client get no combat log and every hit amount is a secret value, so nothing here guesses a number.
+-- Shadow Bolt damage, share and average come from Blizzard's own damage meter (C_DamageMeter) after combat.
+local ADDON, ns = ...
+local C, Core = ns.Compat, ns.Core
+local L = Core.L
+
+-- Slash commands: the first is the main one shown in help text. Change them here only.
+ns.SLASH = { "/shc", "/shadowcount" }
+
+local SC = {}
+KennyShadowCount = SC
+ns.SC = SC
+
+local SCHEMA = 1
+local DEDUPE = 0.25 -- seconds: the cast event and the aura event for one Trance arrive together
+
+SC.TRANCE = 17941
+SC.TRANCE_SECONDS = 10
+SC.NIGHTFALL = 18094
+SC.BOLTS = { [686] = 1, [695] = 2, [705] = 3, [1088] = 4, [1106] = 5, [7641] = 6, [11659] = 7, [11660] = 8, [11661] = 9, [25307] = 10 }
+
+-- Built-in sound files (FileDataIDs, from the community listfile; checked by tools/verify_media.sh). No bundled audio.
+SC.SOUNDS = {
+  trance = 568263, -- sound/spells/alert_wl_shadowtrance.ogg
+  shadow = 569040, -- sound/spells/shadowformimpact.ogg
+  curse = 569079,  -- sound/spells/curse.ogg
+}
+SC.SOUND_MODES = { every = true, record = true, off = true }
+
+SC.DEFAULTS = {
+  shown = true, locked = false, scale = 1, width = 240, height = 150, sound = "every", soundFile = "theme",
+}
+
+local db, settings
+local migrations = {} -- schema 1 is the first release
+
+local function now() return C.Clock() end
+
+local function newFight()
+  return { gained = 0, spent = 0, bolts = 0, start = now() }
+end
+local function newSession()
+  return { gained = 0, spent = 0, bolts = 0, fights = 0, total = 0, sb = 0, measuredBolts = 0, bestAvg = 0, since = C.Now() }
+end
+
+SC.fight = newFight()
+SC.lastFight = nil
+SC.tranceUp = false
+
+function SC.DB() return db end
+function SC.Settings() return settings end
+function SC.Session() return db and db.session end
+
+function SC.ClassFile() return C.Safe(UnitClass and select(2, UnitClass("player"))) end
+function SC.ClassMatches() return SC.ClassFile() == "WARLOCK" end
+
+function SC.Play()
+  local pick = settings and settings.soundFile or "theme"
+  local id = (pick == "theme" and SC.theme and SC.theme.sound) or SC.SOUNDS[pick] or SC.SOUNDS.trance
+  local ok, willPlay = pcall(PlaySoundFile, id, "Master")
+  return ok and willPlay ~= false
+end
+
+-- ---------- Shadow Trance ----------
+local lastGain, endedAt, expiry
+local hardCasts = {} -- castGUID -> true for Shadow Bolts that showed a cast bar
+
+local function setTrance(up, t)
+  SC.tranceUp = up
+  if expiry then expiry:Cancel(); expiry = nil end
+  if up then
+    -- fallback end, in case the aura can't be read: the Trance lasts 10 seconds
+    expiry = C_Timer.NewTimer(SC.TRANCE_SECONDS, function() if SC.tranceUp then setTrance(false, now()) end end)
+  else
+    endedAt = t
+  end
+  if ns.UI then ns.UI.OnTrance(up) end
+end
+
+function SC.OnTranceGain(t)
+  t = t or now()
+  if lastGain and t - lastGain < DEDUPE then return false end
+  lastGain = t
+  local f = SC.fight
+  f.gained = f.gained + 1
+  if db then db.session.gained = db.session.gained + 1 end
+  if (settings and settings.sound or SC.DEFAULTS.sound) == "every" then SC.Play() end
+  setTrance(true, t)
+  return true
+end
+
+-- A Shadow Bolt went off. Instant (no cast bar) while the Trance is up, or a moment after it ended = spent.
+function SC.OnBolt(castGUID, t)
+  t = t or now()
+  local f = SC.fight
+  f.bolts = f.bolts + 1
+  if db then db.session.bolts = db.session.bolts + 1 end
+  local guid = C.Safe(castGUID)
+  local hard = guid ~= nil and hardCasts[guid]
+  if guid ~= nil then hardCasts[guid] = nil end
+  if hard then return false end
+  if SC.tranceUp or (endedAt and t - endedAt < DEDUPE) then
+    endedAt = nil
+    f.spent = f.spent + 1
+    if db then db.session.spent = db.session.spent + 1 end
+    if SC.tranceUp then setTrance(false, t) end
+    if ns.UI then ns.UI.OnSpent() end
+    return true
+  end
+  return false
+end
+
+function SC.OnCastStart(unit, castGUID, spellID)
+  if unit ~= "player" or C.IsSecret(spellID) or not SC.BOLTS[spellID] then return end
+  local guid = C.Safe(castGUID)
+  if guid ~= nil then hardCasts[guid] = true end
+end
+
+function SC.OnSpellcast(unit, castGUID, spellID)
+  if unit ~= "player" or C.IsSecret(spellID) then return end
+  if spellID == SC.TRANCE then SC.OnTranceGain()
+  elseif SC.BOLTS[spellID] then SC.OnBolt(castGUID) end
+end
+
+-- Is the Trance on the player right now? true / false, or nil when the game hides auras.
+function SC.ReadTrance()
+  if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return nil end
+  local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, SC.TRANCE)
+  if not ok or C.IsSecret(aura) then return nil end
+  return aura ~= nil
+end
+
+-- UNIT_AURA: added auras can be secret in combat; any read that fails is skipped quietly.
+function SC.OnAura(unit, updateInfo)
+  if unit ~= "player" then return end
+  if type(updateInfo) == "table" and not C.IsSecret(updateInfo) then
+    local ok, added = pcall(function() return updateInfo.addedAuras end)
+    if ok and type(added) == "table" and not C.IsSecret(added) then
+      for _, aura in ipairs(added) do
+        local ok2, id = pcall(function() return aura.spellId end)
+        if ok2 and not C.IsSecret(id) and id == SC.TRANCE then SC.OnTranceGain() end
+      end
+    end
+  end
+  local up = SC.ReadTrance()
+  if up == true and not SC.tranceUp then SC.OnTranceGain()
+  elseif up == false and SC.tranceUp then setTrance(false, now()) end
+end
+
+-- ---------- Blizzard's damage meter ----------
+local function playerGUID() return UnitGUID and UnitGUID("player") end
+
+function SC.MeterAvailable()
+  if not (C_DamageMeter and C_DamageMeter.IsDamageMeterAvailable) then return false, "no C_DamageMeter" end
+  local ok, avail, why = pcall(C_DamageMeter.IsDamageMeterAvailable)
+  if not ok then return false, tostring(avail) end
+  return avail == true, why
+end
+
+function SC.MeterSource()
+  if not C_DamageMeter then return nil end
+  local guid = playerGUID()
+  local dmg = Enum and Enum.DamageMeterType and Enum.DamageMeterType.DamageDone or 0
+  if C_DamageMeter.GetAvailableCombatSessions and C_DamageMeter.GetCombatSessionSourceFromID then
+    local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+    local newest
+    if ok and type(list) == "table" then
+      for _, s in ipairs(list) do
+        local id = C.SafeNumber(s.sessionID)
+        if id and (not newest or id > newest) then newest = id end
+      end
+    end
+    if newest then
+      local ok2, src = pcall(C_DamageMeter.GetCombatSessionSourceFromID, newest, dmg, guid)
+      if ok2 and type(src) == "table" then return src end
+    end
+  end
+  if C_DamageMeter.GetCombatSessionSourceFromType then
+    local cur = Enum and Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Current or 1
+    local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromType, cur, dmg, guid)
+    if ok and type(src) == "table" then return src end
+  end
+  return nil
+end
+
+function SC.LiveSource()
+  if not (C_DamageMeter and C_DamageMeter.GetCombatSessionSourceFromType) then return nil end
+  local cur = Enum and Enum.DamageMeterSessionType and Enum.DamageMeterSessionType.Current or 1
+  local dmg = Enum and Enum.DamageMeterType and Enum.DamageMeterType.DamageDone or 0
+  local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromType, cur, dmg, playerGUID())
+  if ok and type(src) == "table" then return src end
+  return nil
+end
+
+-- Plain-number summary: { total, sb, split, rows }, or nil while anything is secret.
+function SC.ReadMeter(src)
+  src = src or SC.MeterSource()
+  if type(src) ~= "table" then return nil, "no meter data" end
+  local total = C.SafeNumber(src.totalAmount)
+  if not total then return nil, "secret" end
+  local out = { total = total, sb = 0, rows = {}, split = false }
+  for _, sp in ipairs(type(src.combatSpells) == "table" and src.combatSpells or {}) do
+    local id, amount = C.SafeNumber(sp.spellID), C.SafeNumber(sp.totalAmount)
+    if not (id and amount) then return nil, "secret" end
+    out.rows[#out.rows + 1] = { spellID = id, amount = amount }
+    if SC.BOLTS[id] then out.sb = out.sb + amount; out.split = true end
+  end
+  table.sort(out.rows, function(a, b) return a.amount > b.amount end)
+  return out
+end
+
+-- ---------- fights ----------
+function SC.StartFight()
+  SC.fight = newFight()
+  SC.fight.inCombat = true
+  if ns.UI then ns.UI.OnCombat(true) end
+end
+
+function SC.EndFight()
+  local f = SC.fight
+  f.inCombat = false
+  f.duration = math.max(0, now() - f.start)
+  if ns.UI then ns.UI.OnCombat(false) end
+  local tries = 0
+  local function attempt()
+    tries = tries + 1
+    if SC.fight ~= f or f.done then return end
+    local r = SC.ReadMeter()
+    if r or tries >= 4 then SC.FinishFight(f, r) return end
+    C_Timer.After(1, attempt)
+  end
+  C_Timer.After(0.5, attempt)
+end
+
+function SC.FinishFight(f, r)
+  f.done = true
+  local res = { gained = f.gained, spent = f.spent, bolts = f.bolts, duration = f.duration or 0 }
+  if r then
+    res.total = r.total
+    if r.split then
+      res.sb = r.sb
+      res.share = r.total > 0 and r.sb / r.total or 0
+      res.avg = f.bolts > 0 and r.sb / f.bolts or nil
+    end
+  end
+  SC.lastFight = res
+  if db and (f.gained > 0 or f.bolts > 0 or (r and r.total > 0)) then
+    local s = db.session
+    s.fights = s.fights + 1
+    if r then
+      s.total = s.total + r.total
+      if f.bolts > 0 then db.meterSplits = r.split end
+      if r.split then
+        s.sb = s.sb + r.sb
+        s.measuredBolts = s.measuredBolts + f.bolts
+        if res.avg and res.avg > s.bestAvg and f.bolts >= 2 then
+          local beaten = s.bestAvg > 0
+          s.bestAvg = res.avg
+          res.record = beaten
+          if beaten and settings.sound == "record" then SC.Play() end
+        end
+      end
+    end
+  end
+  if ns.UI then ns.UI.Refresh() end
+  return res
+end
+
+function SC.ResetSession()
+  if not db then return end
+  db.session = newSession()
+  SC.lastFight = nil
+  if ns.UI then ns.UI.Refresh() end
+end
+
+function SC.SessionStats()
+  local s = db and db.session
+  if not s then return nil end
+  return {
+    gained = s.gained, spent = s.spent, bolts = s.bolts, fights = s.fights, total = s.total, sb = s.sb, bestAvg = s.bestAvg,
+    share = (s.total > 0 and s.sb > 0) and s.sb / s.total or nil,
+    avg = s.measuredBolts > 0 and s.sb / s.measuredBolts or nil,
+  }
+end
+
+-- ---------- theme: Warlock colours, then the talent tree with the most points ----------
+local function hex(h)
+  h = tostring(h or "FFFFFF")
+  return tonumber(h:sub(1, 2), 16) / 255, tonumber(h:sub(3, 4), 16) / 255, tonumber(h:sub(5, 6), 16) / 255
+end
+SC.Hex = hex
+
+function SC.TreePoints()
+  if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_Traits and C_Traits.GetConfigInfo
+    and C_Traits.GetGroupDisplayInfoByTreeID and C_Traits.GetGroupCurrencyInfo) then return nil end
+  local ok, configID = pcall(C_ClassTalents.GetActiveConfigID)
+  configID = ok and C.SafeNumber(configID)
+  if not configID then return nil end
+  local ok2, cfg = pcall(C_Traits.GetConfigInfo, configID)
+  local treeID = ok2 and type(cfg) == "table" and type(cfg.treeIDs) == "table" and C.SafeNumber(cfg.treeIDs[1])
+  if not treeID then return nil end
+  local ok3, displays = pcall(C_Traits.GetGroupDisplayInfoByTreeID, treeID)
+  if not ok3 or type(displays) ~= "table" or #displays == 0 then return nil end
+  local ids = {}
+  for i, d in ipairs(displays) do ids[i] = d.groupID end
+  local ok4, groups = pcall(C_Traits.GetGroupCurrencyInfo, configID, ids)
+  if not ok4 or type(groups) ~= "table" then return nil end
+  local spentBy = {}
+  for _, g in ipairs(groups) do
+    local cur = type(g.currencyInfos) == "table" and g.currencyInfos[1]
+    local id = C.SafeNumber(g.traitNodeGroupID)
+    if id and cur then spentBy[id] = C.SafeNumber(cur.spent) end
+  end
+  local out = {}
+  for _, d in ipairs(displays) do
+    out[#out + 1] = { skillLine = C.SafeNumber(d.skillLineID), order = C.SafeNumber(d.orderIndex) or #out,
+      name = C.Safe(d.displayName), spent = spentBy[C.SafeNumber(d.groupID) or -1] or 0 }
+  end
+  table.sort(out, function(a, b) return a.order < b.order end)
+  return out
+end
+
+function SC.PickTree(classTheme, points)
+  if type(points) ~= "table" or not classTheme then return nil end
+  local best, bestPos, second = nil, nil, -1
+  for pos, t in ipairs(points) do
+    if not best or t.spent > best.spent then
+      if best then second = best.spent end
+      best, bestPos = t, pos
+    elseif t.spent > second then second = t.spent end
+  end
+  if not best or best.spent <= 0 or best.spent == second then return nil end
+  local trees = classTheme.trees or {}
+  if best.skillLine and trees[best.skillLine] then return trees[best.skillLine], best end
+  local byOrder = classTheme.order and classTheme.order[bestPos]
+  if byOrder and trees[byOrder] then return trees[byOrder], best end
+  return nil
+end
+
+function SC.ResolveTheme(points)
+  local base = ns.THEME
+  local tree, info = SC.PickTree(base, points)
+  local th = { tree = info and info.name, sound = tree and tree.sound or base.sound }
+  th.frame = { hex(base.frame) }
+  th.accent = { hex(tree and tree.accent or base.accent) }
+  th.title = { hex(base.title or base.frame) }
+  return th
+end
+
+function SC.UpdateTheme()
+  SC.theme = SC.ResolveTheme(SC.TreePoints())
+  if ns.UI and ns.UI.ApplyTheme then ns.UI.ApplyTheme(SC.theme) end
+  return SC.theme
+end
+SC.theme = SC.ResolveTheme(nil)
+
+-- ---------- text helpers ----------
+function SC.Short(n)
+  n = C.SafeNumber(n)
+  if not n then return "?" end
+  if n >= 1e6 then return ("%.1fM"):format(n / 1e6) end
+  if n >= 1e4 then return ("%.1fK"):format(n / 1e3) end
+  return tostring(math.floor(n + 0.5))
+end
+function SC.Pct(x) return x and ("%d%%"):format(math.floor(x * 100 + 0.5)) or "-" end
+
+function SC.StateLines()
+  local s = SC.SessionStats() or {}
+  local avail, why = SC.MeterAvailable()
+  local f = SC.lastFight
+  return {
+    "settings: sound=" .. tostring(settings and settings.sound) .. " file=" .. tostring(settings and settings.soundFile),
+    "class: " .. tostring(SC.ClassFile()) .. " / tree: " .. tostring(SC.theme and SC.theme.tree or "class default"),
+    "damage meter available: " .. tostring(avail) .. (why and why ~= "" and (" (" .. tostring(why) .. ")") or ""),
+    "meter lists Shadow Bolt: " .. tostring(db and db.meterSplits),
+    "trance up: " .. tostring(SC.tranceUp) .. ", aura readable: " .. tostring(SC.ReadTrance() ~= nil),
+    ("session: %s Trances, %s instant bolts, %s bolts, %s fights"):format(tostring(s.gained), tostring(s.spent), tostring(s.bolts), tostring(s.fights)),
+    "last fight: " .. (f and ("%d Trances, %d instant, %d bolts, total %s"):format(f.gained, f.spent, f.bolts, SC.Short(f.total)) or "none"),
+  }
+end
+
+-- ---------- events ----------
+local ev = CreateFrame("Frame")
+ev:RegisterEvent("ADDON_LOADED")
+ev:RegisterEvent("PLAYER_REGEN_DISABLED")
+ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+ev:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
+ev:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+ev:RegisterUnitEvent("UNIT_AURA", "player")
+for _, e in ipairs({ "PLAYER_LOGIN", "TRAIT_CONFIG_UPDATED", "ACTIVE_TALENT_GROUP_CHANGED", "PLAYER_TALENT_UPDATE" }) do ev:RegisterEvent(e) end
+
+local handlers = {
+  PLAYER_REGEN_DISABLED = function() SC.StartFight() end,
+  PLAYER_REGEN_ENABLED = function()
+    SC.EndFight()
+    if SC.themeStale then SC.themeStale = false; SC.UpdateTheme() end
+  end,
+  UNIT_SPELLCAST_START = SC.OnCastStart,
+  UNIT_SPELLCAST_SUCCEEDED = SC.OnSpellcast,
+  UNIT_AURA = SC.OnAura,
+  PLAYER_LOGIN = function()
+    SC.UpdateTheme()
+    if ns.UI then ns.UI.UpdateVisibility() end
+  end,
+}
+local function talentsChanged() if C.InCombat() then SC.themeStale = true else SC.UpdateTheme() end end
+handlers.TRAIT_CONFIG_UPDATED, handlers.ACTIVE_TALENT_GROUP_CHANGED, handlers.PLAYER_TALENT_UPDATE = talentsChanged, talentsChanged, talentsChanged
+
+ev:SetScript("OnEvent", function(_, event, ...)
+  if event == "ADDON_LOADED" then
+    if ... ~= ADDON then return end
+    db = Core.Migrate(KennyShadowCountDB, migrations, SCHEMA)
+    db.session = db.session or newSession()
+    KennyShadowCountDB = db
+    settings = Core.Settings(db.settings, SC.DEFAULTS)
+    if ns.UI then Core.SafeCall("build", ns.UI.Build, db, settings) end
+    return
+  end
+  local h = handlers[event]
+  if h and db then Core.SafeCall(event, h, ...) end
+end)
+
+Core.Setup({ cmd = ns.SLASH[1],
+  required = { "C_DamageMeter.GetCombatSessionSourceFromType", "C_DamageMeter.GetAvailableCombatSessions",
+    "C_DamageMeter.GetCombatSessionSourceFromID", "PlaySoundFile", "C_Timer.After", "C_Timer.NewTimer", "UnitGUID" },
+  optional = { "C_UnitAuras.GetPlayerAuraBySpellID", "C_DamageMeter.IsDamageMeterAvailable", "AbbreviateNumbers",
+    "C_ClassTalents.GetActiveConfigID", "C_Traits.GetGroupDisplayInfoByTreeID", "C_Traits.GetGroupCurrencyInfo" },
+  db = function() return db end,
+  firstRun = { L["Nightfall counter ready. Drag the box to move it; type %s for options."]:format(ns.SLASH[1]) },
+  debugLines = function() return SC.StateLines() end })

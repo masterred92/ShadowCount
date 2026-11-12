@@ -1,0 +1,18 @@
+## Interface: 16001
+## Title: Shadow Count
+## Notes: Nightfall counter for Warlocks: flashes NIGHTFALL! while Shadow Trance is up, counts Trances gained and instant Shadow Bolts spent, then Shadow Bolt damage, share and average from the game's own damage meter. Blizzard sounds and textures only.
+## Author: Kenny
+## Version: 1.0.0
+## SavedVariables: KennyShadowCountDB
+## X-License: MIT
+## IconTexture: Interface\Icons\Spell_Shadow_Twilight
+## X-Category: Combat
+## X-Website: https://github.com/masterred92/ShadowCount
+
+Libs\KennyShared\Compat.lua
+Libs\KennyShared\Core.lua
+Libs\KennyShared\Hub.lua
+Locales\enUS.lua
+Themes.lua
+ShadowCount.lua
+Frame.lua
