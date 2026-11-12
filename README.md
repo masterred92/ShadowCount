@@ -27,7 +27,7 @@ Turn on the game's meter if the box shows no damage: **Options > Gameplay > Adva
 `/shc soundfile theme|trance|shadow|curse` picks the sound and plays it once. All sounds are built into the game.
 
 ## Download
-- **CurseForge:** https://www.curseforge.com/wow/addons/shadowcount. Author: [MasterRed92](https://www.curseforge.com/members/masterred92/projects).
+- **CurseForge:** https://www.curseforge.com/wow/addons/shadow-count. Author: [MasterRed92](https://www.curseforge.com/members/masterred92/projects).
 - **Wago Addons:** https://addons.wago.io/addons/shadowcount.
 - **GitHub:** [Releases](https://github.com/masterred92/ShadowCount/releases) · [Issues](https://github.com/masterred92/ShadowCount/issues)
 - **More by Kenny:** [GaleCount](https://github.com/masterred92/GaleCount) · [ReckoningCheckoning](https://github.com/masterred92/ReckoningCheckoning) · [BeastMode](https://github.com/masterred92/BeastMode) · [GoldPerSpot](https://github.com/masterred92/GoldPerSpot) · [MatTooltip](https://github.com/masterred92/MatTooltip) · [PriceLog](https://github.com/masterred92/PriceLog) · [NeutralFlip](https://github.com/masterred92/NeutralFlip)
