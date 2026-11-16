@@ -298,19 +298,29 @@ function UI.Lines()
   end
   local out = {}
   local cur = f or SC.fight
-  out[#out + 1] = label(L["Fight"]) .. ("%d %s · %d %s"):format(cur.gained, trances(cur.gained), cur.spent, L["instant"])
+  local hidden = SC.mode == "none" -- gains can't be seen on this client: show instant bolts only
+  if hidden then
+    out[#out + 1] = label(L["Fight"]) .. ("%d %s"):format(cur.spent, L["instant"])
+  else
+    out[#out + 1] = label(L["Fight"]) .. ("%d %s · %d %s"):format(cur.gained, trances(cur.gained), cur.spent, L["instant"])
+  end
   if f and f.sb then
     -- a record shows "new best!" instead of the average (the new best is on the "Avg bolt" line below)
     out[#out + 1] = label(L["Shadow Bolt"]) .. ("%s · %s"):format(SC.Short(f.sb), SC.Pct(f.share))
       .. (f.record and ("  |cffffd200" .. L["new best!"] .. "|r") or (" · %s %s"):format(L["avg"], f.avg and SC.Short(f.avg) or "-"))
   end
   if countOnly then
-    out[#out + 1] = label(L["Session"]) .. ("%d %s · %d %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"])
+    out[#out + 1] = hidden and label(L["Session"]) .. ("%d %s"):format(s.spent or 0, L["instant"])
+      or label(L["Session"]) .. ("%d %s · %d %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"])
     out[#out + 1] = "|cffaaaaaa" .. L["No Shadow Bolt meter line: counting procs only."] .. "|r"
   else
-    out[#out + 1] = label(L["Session"]) .. ("%d %s · %d %s · %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"], SC.Pct(s.share))
+    out[#out + 1] = hidden and label(L["Session"]) .. ("%d %s · %s"):format(s.spent or 0, L["instant"], SC.Pct(s.share))
+      or label(L["Session"]) .. ("%d %s · %d %s · %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"], SC.Pct(s.share))
     out[#out + 1] = label(L["Avg bolt"]) .. ("%s · %s %s"):format(s.avg and SC.Short(s.avg) or "-", L["best"],
       (s.bestAvg or 0) > 0 and SC.Short(s.bestAvg) or "-")
+  end
+  if hidden then
+    out[#out + 1] = "|cffaaaaaa" .. L["This client hides Shadow Trance from addons: instant Shadow Bolts are counted, Trances gained are not."] .. "|r"
   end
   return out
 end

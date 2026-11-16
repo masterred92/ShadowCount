@@ -2,6 +2,9 @@ package.path = "./tests/?.lua;" .. package.path
 local M = require("mock_wow")
 M.install()
 M.class, M.className = "WARLOCK", "Warlock"
+-- This file replays a client without secret restrictions, where the Trance aura is always readable ("aura" mode).
+-- The client's real secret rules are replayed in tests/test_trance_detection.lua.
+C_Secrets = { HasSecretRestrictions = function() return false end, GetSpellAuraSecrecy = function() return 0 end }
 M.trees = { { 355, "Affliction", 31 }, { 354, "Demonology", 0 }, { 593, "Destruction", 20 } }
 local ns = M.loadAddon(".", "ShadowCount")
 local SC, UI = KennyShadowCount, ns.UI
@@ -49,8 +52,9 @@ M.advance(2)
 M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "t3", 17941)
 M.advance(11)
 check(not SC.tranceUp and SC.fight.gained == 3, "Trance ends after 10 seconds when the aura can't be read")
+M.fire("UNIT_SPELLCAST_START", "player", "sb-3", 686)
 M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "sb-3", 686)
-check(SC.fight.spent == 2 and SC.fight.bolts == 4, "bolt with no Trance is not instant")
+check(SC.fight.spent == 2 and SC.fight.bolts == 4, "hard-cast bolt with no Trance is not instant")
 -- other units, other spells and secret IDs ignored
 local secretID = {}; M.secret[secretID] = true
 M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "x", secretID)

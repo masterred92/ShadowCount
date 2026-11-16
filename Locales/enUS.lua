@@ -21,6 +21,7 @@ ns.Core.AddLocale("enUS", {
   ["Shadow Bolt share"] = true,
   ["Shadow Bolt share after combat"] = true,
   ["Some features are switched off. Type"] = true,
+  ["This client hides Shadow Trance from addons: instant Shadow Bolts are counted, Trances gained are not."] = true,
   ["Trance"] = true,
   ["Trance faded"] = true,
   ["Trances"] = true,

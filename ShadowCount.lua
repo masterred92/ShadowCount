@@ -6,9 +6,17 @@
 --   * The player's Shadow Bolt ranks are 686, 695, 705, 1088, 1106, 7641, 11659, 11660, 11661 and 25307
 --     (SkillLineAbility, Destruction 593, Warlock class mask).
 --
--- How it counts: a Trance is "gained" when the player gains 17941 (cast event or the aura appearing, deduplicated).
--- It is "spent" when a Shadow Bolt succeeds while the Trance is up and that bolt had no cast bar (no
--- UNIT_SPELLCAST_START for its cast GUID), which is what an instant Shadow Bolt looks like.
+-- How it counts:
+--   * Spent: a Shadow Bolt that succeeds with no cast bar (no UNIT_SPELLCAST_START for its cast GUID) is instant,
+--     and only a Trance makes it instant. The player's own cast events are never secret on this client
+--     (SecretWhenUnitSpellCastRestricted only hides other units), so spends are counted on any client.
+--   * Gained: only when the client lets us see it. In combat auras are secret unless the spell is flagged
+--     never-secret (GetPlayerAuraBySpellID: SecretWhenUnitAuraRestricted + RequiresNonSecretAura, so a hidden aura
+--     returns nothing), and nobody outside the game knows whether 17941 has that flag. So the mode is picked at
+--     runtime (login, each fight start, /shc debug): "aura" when C_Secrets.GetSpellAuraSecrecy(17941) == 0 or the
+--     client has no secret restrictions; "cast" once the player's UNIT_SPELLCAST_SUCCEEDED for 17941 has been seen;
+--     otherwise "none": gains aren't shown, and the 10-second countdown never starts for a Trance we didn't see.
+--   * An aura read that returns nothing while auras are hidden means "unknown", never "the Trance is down".
 --
 -- Addons on this client get no combat log and every hit amount is a secret value, so nothing here guesses a number.
 -- Shadow Bolt damage, share and average come from Blizzard's own damage meter (C_DamageMeter) after combat.
@@ -24,7 +32,7 @@ KennyShadowCount = SC
 ns.SC = SC
 
 local SCHEMA = 1
-local DEDUPE = 0.25 -- seconds: the cast event and the aura event for one Trance arrive together
+local DEDUPE = 0.25 -- seconds: the 17941 cast event and its aura appearing are one gain, not two
 
 SC.TRANCE = 17941
 SC.TRANCE_SECONDS = 10
@@ -73,22 +81,50 @@ function SC.Play()
   return ok and willPlay ~= false
 end
 
+-- ---------- detection mode ----------
+SC.mode = "none"        -- "aura", "cast" or "none" (see the header)
+SC.restricted = nil     -- C_Secrets.HasSecretRestrictions(): true / false / nil (unknown)
+SC.secrecy = nil        -- C_Secrets.GetSpellAuraSecrecy(17941): 0 never, 1 always, 2 contextually secret
+SC.auraReadable = false -- 17941's aura can be read in combat
+SC.castsSeen = 0        -- plain 17941 cast events this session
+
+local function call(fn, ...)
+  if type(fn) ~= "function" then return nil end
+  local ok, v = pcall(fn, ...)
+  if not ok or C.IsSecret(v) then return nil end
+  return v
+end
+
+function SC.EvaluateMode()
+  local S = C_Secrets
+  SC.restricted = S and call(S.HasSecretRestrictions)
+  -- a client with neither C_Secrets nor issecretvalue has no secret values at all
+  if SC.restricted == nil and type(S) ~= "table" and issecretvalue == nil then SC.restricted = false end
+  local level = S and call(S.GetSpellAuraSecrecy, SC.TRANCE)
+  SC.secrecy = type(level) == "number" and level or nil
+  SC.auraReadable = (SC.restricted == false or SC.secrecy == 0) and C_UnitAuras ~= nil
+    and type(C_UnitAuras.GetPlayerAuraBySpellID) == "function"
+  SC.mode = SC.auraReadable and "aura" or (db and db.castSeen and "cast") or "none"
+  return SC.mode
+end
+
 -- ---------- Shadow Trance ----------
-local lastGain, endedAt, expiry
+local lastGain, expiry, auraExp
 local hardCasts = {} -- castGUID -> true for Shadow Bolts that showed a cast bar
 
-local function setTrance(up, t)
+local function setTrance(up)
   SC.tranceUp = up
   if expiry then expiry:Cancel(); expiry = nil end
   if up then
-    -- fallback end, in case the aura can't be read: the Trance lasts 10 seconds
-    expiry = C_Timer.NewTimer(SC.TRANCE_SECONDS, function() if SC.tranceUp then setTrance(false, now()) end end)
+    -- the Trance lasts 10 seconds: our own end time, used when the aura's time left can't be read
+    expiry = C_Timer.NewTimer(SC.TRANCE_SECONDS, function() if SC.tranceUp then setTrance(false) end end)
   else
-    endedAt = t
+    auraExp = nil
   end
   if ns.UI then ns.UI.OnTrance(up) end
 end
 
+-- A Trance gain we actually saw (its cast event, or its aura in "aura" mode). Never called on a guess.
 function SC.OnTranceGain(t)
   t = t or now()
   if lastGain and t - lastGain < DEDUPE then return false end
@@ -97,29 +133,25 @@ function SC.OnTranceGain(t)
   f.gained = f.gained + 1
   if db then db.session.gained = db.session.gained + 1 end
   if (settings and settings.sound or SC.DEFAULTS.sound) == "every" then SC.Play() end
-  setTrance(true, t)
+  setTrance(true)
   return true
 end
 
--- A Shadow Bolt went off. Instant (no cast bar) while the Trance is up, or a moment after it ended = spent.
-function SC.OnBolt(castGUID, t)
-  t = t or now()
+-- A Shadow Bolt went off. No cast bar = instant = a Trance was spent, seen or not. If its cast GUID can't be read,
+-- it only counts when a seen Trance is up.
+function SC.OnBolt(castGUID)
   local f = SC.fight
   f.bolts = f.bolts + 1
   if db then db.session.bolts = db.session.bolts + 1 end
   local guid = C.Safe(castGUID)
   local hard = guid ~= nil and hardCasts[guid]
   if guid ~= nil then hardCasts[guid] = nil end
-  if hard then return false end
-  if SC.tranceUp or (endedAt and t - endedAt < DEDUPE) then
-    endedAt = nil
-    f.spent = f.spent + 1
-    if db then db.session.spent = db.session.spent + 1 end
-    if SC.tranceUp then setTrance(false, t) end
-    if ns.UI then ns.UI.OnSpent() end
-    return true
-  end
-  return false
+  if hard or (guid == nil and not SC.tranceUp) then return false end
+  f.spent = f.spent + 1
+  if db then db.session.spent = db.session.spent + 1 end
+  if SC.tranceUp then setTrance(false) end
+  if ns.UI then ns.UI.OnSpent() end
+  return true
 end
 
 function SC.OnCastStart(unit, castGUID, spellID)
@@ -130,33 +162,51 @@ end
 
 function SC.OnSpellcast(unit, castGUID, spellID)
   if unit ~= "player" or C.IsSecret(spellID) then return end
-  if spellID == SC.TRANCE then SC.OnTranceGain()
+  if spellID == SC.TRANCE then
+    SC.castsSeen = SC.castsSeen + 1
+    if db and not db.castSeen then db.castSeen = true end
+    if SC.mode == "none" then SC.mode = "cast" end
+    SC.OnTranceGain()
   elseif SC.BOLTS[spellID] then SC.OnBolt(castGUID) end
 end
 
--- Is the Trance on the player right now? true / false, or nil when the game hides auras.
+-- The Trance aura in "aura" mode: true + expirationTime, or false when it is not on the player. nil = unknown
+-- (not readable on this client, a failed read or a secret value), which never ends a Trance.
 function SC.ReadTrance()
-  if not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return nil end
+  if not SC.auraReadable then return nil end
   local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, SC.TRANCE)
   if not ok or C.IsSecret(aura) then return nil end
-  return aura ~= nil
+  if aura == nil then return false end
+  if type(aura) ~= "table" then return nil end
+  local ok2, exp = pcall(function() return aura.expirationTime end)
+  return true, ok2 and C.SafeNumber(exp) or nil
 end
 
--- UNIT_AURA: added auras can be secret in combat; any read that fails is skipped quietly.
-function SC.OnAura(unit, updateInfo)
+-- UNIT_AURA on the player: only "aura" mode reads anything (the payload itself is secret in combat).
+function SC.OnAura(unit)
   if unit ~= "player" then return end
-  if type(updateInfo) == "table" and not C.IsSecret(updateInfo) then
-    local ok, added = pcall(function() return updateInfo.addedAuras end)
-    if ok and type(added) == "table" and not C.IsSecret(added) then
-      for _, aura in ipairs(added) do
-        local ok2, id = pcall(function() return aura.spellId end)
-        if ok2 and not C.IsSecret(id) and id == SC.TRANCE then SC.OnTranceGain() end
-      end
-    end
+  local up, exp = SC.ReadTrance()
+  if up == true then
+    -- appeared, or refreshed by a new Nightfall proc (later expirationTime): a gain
+    if not SC.tranceUp or (exp and auraExp and exp > auraExp) then SC.OnTranceGain() end
+    auraExp = exp or auraExp
+  elseif up == false and SC.tranceUp then
+    setTrance(false)
   end
+end
+
+function SC.DetectionLines()
+  SC.EvaluateMode()
+  local S = C_Secrets
   local up = SC.ReadTrance()
-  if up == true and not SC.tranceUp then SC.OnTranceGain()
-  elseif up == false and SC.tranceUp then setTrance(false, now()) end
+  return {
+    ("detection mode: %s  (aura = buff read, cast = cast event, none = gains hidden; instant bolts always count)"):format(SC.mode),
+    ("secret restrictions: %s, auras secret now: %s, in combat: %s"):format(tostring(SC.restricted),
+      tostring(S and call(S.ShouldAurasBeSecret)), tostring(C.InCombat())),
+    ("Shadow Trance 17941: secrecy %s (0 = never secret), aura %s, Trance up: %s"):format(tostring(SC.secrecy),
+      up == nil and "unknown" or (up and "up" or "not up"), tostring(SC.tranceUp)),
+    ("Trance cast events seen: %d this session, ever: %s"):format(SC.castsSeen, tostring(db and db.castSeen or false)),
+  }
 end
 
 -- ---------- Blizzard's damage meter ----------
@@ -380,15 +430,16 @@ function SC.StateLines()
   local s = SC.SessionStats() or {}
   local avail, why = SC.MeterAvailable()
   local f = SC.lastFight
-  return {
+  local out = {
     "settings: sound=" .. tostring(settings and settings.sound) .. " file=" .. tostring(settings and settings.soundFile),
     "class: " .. tostring(SC.ClassFile()) .. " / tree: " .. tostring(SC.theme and SC.theme.tree or "class default"),
     "damage meter available: " .. tostring(avail) .. (why and why ~= "" and (" (" .. tostring(why) .. ")") or ""),
     "meter lists Shadow Bolt: " .. tostring(db and db.meterSplits),
-    "trance up: " .. tostring(SC.tranceUp) .. ", aura readable: " .. tostring(SC.ReadTrance() ~= nil),
     ("session: %s Trances, %s instant bolts, %s bolts, %s fights"):format(tostring(s.gained), tostring(s.spent), tostring(s.bolts), tostring(s.fights)),
     "last fight: " .. (f and ("%d Trances, %d instant, %d bolts, total %s"):format(f.gained, f.spent, f.bolts, SC.Short(f.total)) or "none"),
   }
+  for _, l in ipairs(SC.DetectionLines()) do out[#out + 1] = l end
+  return out
 end
 
 -- ---------- events ----------
@@ -402,7 +453,7 @@ ev:RegisterUnitEvent("UNIT_AURA", "player")
 for _, e in ipairs({ "PLAYER_LOGIN", "TRAIT_CONFIG_UPDATED", "ACTIVE_TALENT_GROUP_CHANGED", "PLAYER_TALENT_UPDATE" }) do ev:RegisterEvent(e) end
 
 local handlers = {
-  PLAYER_REGEN_DISABLED = function() SC.StartFight() end,
+  PLAYER_REGEN_DISABLED = function() SC.EvaluateMode(); SC.StartFight() end,
   PLAYER_REGEN_ENABLED = function()
     SC.EndFight()
     if SC.themeStale then SC.themeStale = false; SC.UpdateTheme() end
@@ -411,6 +462,7 @@ local handlers = {
   UNIT_SPELLCAST_SUCCEEDED = SC.OnSpellcast,
   UNIT_AURA = SC.OnAura,
   PLAYER_LOGIN = function()
+    SC.EvaluateMode()
     SC.UpdateTheme()
     if ns.UI then ns.UI.UpdateVisibility() end
   end,
@@ -435,7 +487,8 @@ end)
 Core.Setup({ cmd = ns.SLASH[1],
   required = { "C_DamageMeter.GetCombatSessionSourceFromType", "C_DamageMeter.GetAvailableCombatSessions",
     "C_DamageMeter.GetCombatSessionSourceFromID", "PlaySoundFile", "C_Timer.After", "C_Timer.NewTimer", "UnitGUID" },
-  optional = { "C_UnitAuras.GetPlayerAuraBySpellID", "C_DamageMeter.IsDamageMeterAvailable", "AbbreviateNumbers",
+  optional = { "C_UnitAuras.GetPlayerAuraBySpellID", "C_Secrets.HasSecretRestrictions", "C_Secrets.GetSpellAuraSecrecy",
+    "C_Secrets.ShouldAurasBeSecret", "C_DamageMeter.IsDamageMeterAvailable", "AbbreviateNumbers",
     "C_ClassTalents.GetActiveConfigID", "C_Traits.GetGroupDisplayInfoByTreeID", "C_Traits.GetGroupCurrencyInfo" },
   db = function() return db end,
   firstRun = { L["Nightfall counter ready. Drag the box to move it; type %s for options."]:format(ns.SLASH[1]) },
