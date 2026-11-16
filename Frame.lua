@@ -151,6 +151,7 @@ function UI.Build(database, s)
   reset:SetText(L["Reset session"])
   reset:SetScript("OnClick", function() SC.ResetSession(); Core.Print(L["session reset."]) end)
   frame.reset = reset
+  reset:SetShown(not C.InCombat()) -- a /reload in combat gets no PLAYER_REGEN_DISABLED, so start hidden
 
   local grip = CreateFrame("Button", nil, frame)
   grip:SetSize(14, 14)
@@ -182,35 +183,86 @@ end
 
 function UI.Frame() return frame end
 
--- While the Trance is up: a steady pulse between 0.25 and 0.6 alpha. A spent bolt: one short fade.
--- The headline counts down the Trance's 10 seconds ("NIGHTFALL!  7s"), so you know how long is left to use it.
-local pulse, fadeLeft, tranceEnds, shownSecs = 0, 0, 0, nil
+-- While the Trance is up: a gentle pulse between 0.10 and 0.20 alpha (was 0.25-0.6). At the 0.20 peak, white text
+-- is at least 7:1 and the gold labels at least 5:1 (WCAG) on the glow, even over a bright world. A spent bolt: one short fade.
+local GLOW_MID, GLOW_SWING, GLOW_FADE = 0.15, 0.05, 0.20
+
+-- The headline counts down the Trance ("NIGHTFALL!  7s"). Time left comes from the aura's expirationTime when the
+-- game lets us read it, else from our own clock at the gain (the Trance lasts 10 seconds). Buff data can be hidden or
+-- secret in combat on this client, so every read is guarded; when nothing is readable the headline is plain "NIGHTFALL!".
+local pulse, fadeLeft, tranceEnds, shownSecs, sinceRead = 0, 0, nil, nil, 0
+
+local function clock()
+  local ok, t = pcall(C.Clock)
+  t = ok and C.SafeNumber(t) or nil
+  if t and t == t then return t end -- t == t rules out NaN
+  return nil
+end
+
+local function auraTimeLeft(now)
+  if not now or not (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) then return nil end
+  local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, SC.TRANCE)
+  if not ok or type(aura) ~= "table" or C.IsSecret(aura) then return nil end
+  local ok2, exp = pcall(function() return aura.expirationTime end)
+  exp = ok2 and C.SafeNumber(exp) or nil
+  if not exp or exp ~= exp or exp <= 0 then return nil end -- 0 = no expiry (or hidden)
+  local left = exp - now
+  if left <= 0 or left > 60 then return nil end
+  return left
+end
+
+-- Seconds left (a positive number), or nil when it can't be told.
+function UI.TranceTimeLeft()
+  local now = clock()
+  local left = auraTimeLeft(now)
+  if left then return left end
+  if now and tranceEnds and tranceEnds - now > 0 then return tranceEnds - now end
+  return nil
+end
+
+local function showTranceHead()
+  local left = UI.TranceTimeLeft()
+  local secs = left and math.ceil(left) or nil
+  if secs == shownSecs then return end
+  shownSecs = secs
+  frame.head:SetText(secs and ("%s  %ds"):format(L["NIGHTFALL!"], secs) or L["NIGHTFALL!"])
+end
+
+-- While the glow is on, the headline uses the light title colour instead of the accent, so it reads on the glow.
+local function headColour(onGlow)
+  local th = SC.theme
+  if th then frame.head:SetTextColor(unpack(onGlow and th.title or th.accent)) end
+end
+
 local function glowTick(_, elapsed)
   if SC.tranceUp then
     pulse = pulse + elapsed
-    frame.flash:SetAlpha(0.425 + 0.175 * math.sin(pulse * 6))
-    local secs = math.max(0, math.ceil(tranceEnds - C.Clock()))
-    if secs ~= shownSecs then
-      shownSecs = secs
-      frame.head:SetText(("%s  %ds"):format(L["NIGHTFALL!"], secs))
-    end
+    frame.flash:SetAlpha(GLOW_MID + GLOW_SWING * math.sin(pulse * 6))
+    sinceRead = sinceRead + elapsed
+    if sinceRead >= 0.2 then sinceRead = 0; showTranceHead() end -- 5 reads a second is plenty for whole seconds
     return
   end
   fadeLeft = fadeLeft - elapsed
-  if fadeLeft <= 0 then frame.flash:SetAlpha(0); frame:SetScript("OnUpdate", nil) return end
-  frame.flash:SetAlpha(0.5 * fadeLeft / 0.4)
+  if fadeLeft <= 0 then frame.flash:SetAlpha(0); headColour(false); frame:SetScript("OnUpdate", nil) return end
+  frame.flash:SetAlpha(GLOW_FADE * fadeLeft / 0.4)
 end
 
 function UI.OnTrance(up)
   if not frame then return end
   if up then
-    pulse, tranceEnds, shownSecs = 0, C.Clock() + SC.TRANCE_SECONDS, nil
-    frame.head:SetText(("%s  %ds"):format(L["NIGHTFALL!"], SC.TRANCE_SECONDS))
-    frame.flash:SetAlpha(0.6)
+    local now = clock()
+    pulse, sinceRead, shownSecs = 0, 0, false -- false = nothing shown yet (nil means "no countdown")
+    tranceEnds = now and now + SC.TRANCE_SECONDS or nil
+    showTranceHead()
+    headColour(true)
+    frame.flash:SetAlpha(GLOW_MID + GLOW_SWING)
     frame:SetScript("OnUpdate", glowTick)
-  elseif (frame.head:GetText() or ""):find(L["NIGHTFALL!"], 1, true) then
-    frame.head:SetText(L["Trance faded"])
-    fadeLeft = 0
+  else
+    tranceEnds = nil
+    if (frame.head:GetText() or ""):find(L["NIGHTFALL!"], 1, true) then
+      frame.head:SetText(L["Trance faded"])
+      fadeLeft = 0
+    end
   end
   UI.Refresh()
 end
@@ -219,7 +271,7 @@ function UI.OnSpent()
   if not frame then return end
   frame.head:SetText(L["INSTANT SHADOW BOLT!"])
   fadeLeft = 0.4
-  frame.flash:SetAlpha(0.5)
+  frame.flash:SetAlpha(GLOW_FADE)
   frame:SetScript("OnUpdate", glowTick)
   UI.Refresh()
 end
@@ -283,7 +335,8 @@ function UI.RenderLive()
   local src = SC.LiveSource and SC.LiveSource()
   local total = src and src.totalAmount
   if total ~= nil and AbbreviateNumbers then
-    frame.lines:SetFormattedText("%s\n%s%s\n|cffaaaaaa%s|r", head, label(L["You"]), AbbreviateNumbers(total), L["Shadow Bolt share after combat"])
+    -- plain white here (not grey): this text can sit on the Trance glow
+    frame.lines:SetFormattedText("%s\n%s%s\n%s", head, label(L["You"]), AbbreviateNumbers(total), L["Shadow Bolt share after combat"])
   else
     frame.lines:SetText(head)
   end
@@ -324,7 +377,7 @@ SlashCmdList.KENNYSHADOWCOUNT = function(msg)
   elseif cmd == "soundfile" and (a == "theme" or SC.SOUNDS[a]) then settings.soundFile = a; SC.Play()
   elseif cmd == "test" then
     if C.InCombat() then Core.Print(L["not in combat."]) return end
-    frame.head:SetText(L["NIGHTFALL!"]); frame.flash:SetAlpha(0.6); fadeLeft = 0.8; frame:SetScript("OnUpdate", glowTick); SC.Play()
+    frame.head:SetText(L["NIGHTFALL!"]); headColour(true); frame.flash:SetAlpha(GLOW_MID + GLOW_SWING); fadeLeft = 0.8; frame:SetScript("OnUpdate", glowTick); SC.Play()
   elseif cmd == "theme" then
     local th = SC.UpdateTheme()
     Core.Print(L["theme"] .. ": " .. tostring(th.tree or L["class default"]))
