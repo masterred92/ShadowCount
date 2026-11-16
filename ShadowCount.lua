@@ -40,7 +40,7 @@ SC.SOUNDS = {
 SC.SOUND_MODES = { every = true, record = true, off = true }
 
 SC.DEFAULTS = {
-  shown = true, locked = false, scale = 1, width = 240, height = 150, sound = "every", soundFile = "theme",
+  shown = true, locked = false, scale = 1, width = 240, height = 160, sound = "every", soundFile = "theme", -- 160 tall: room for four 12 pt lines
 }
 
 local db, settings
