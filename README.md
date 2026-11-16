@@ -45,7 +45,7 @@ The box only appears on a Warlock. Move it by dragging; resize it with the corne
 
 ## In-game test checklist
 1. On a Warlock, the box appears below the middle of the screen, can be dragged and resized, and keeps its place after `/reload`. On other classes it stays hidden.
-2. With Nightfall talented, put Corruption or Drain Life on a mob: when Shadow Trance procs, the box glows, shows `NIGHTFALL!` and plays the alert.
+2. With Nightfall talented, put Corruption or Drain Life on a mob: when Shadow Trance procs and the game lets addons see it, the box glows, shows `NIGHTFALL!` and plays the alert. If `/shc debug` reports that Trances are hidden, no glow appears and only instant bolts are counted.
 3. Cast Shadow Bolt during the Trance: `INSTANT SHADOW BOLT!`, the glow clears and the instant count goes up. Let one run out: the glow clears without counting.
 4. After the fight: Shadow Bolt damage, share and average appear, or "counting procs only". `/shc meter` lists the meter lines.
 5. **Reset session** sets the session line back to 0 and is hidden in combat.
