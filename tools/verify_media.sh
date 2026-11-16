@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 BUILD=${1:-1.60.1.70862}
 MAIN=$(ls *.toc | head -1 | sed 's/\.toc$/.lua/')
 # Textures (by FileDataID): spell_shadow_twilight, ui-statusbar, ui-chatim-sizegrabber-up, ui-tooltip-background, ui-tooltip-border
-TEX="136223 137012 386864 137056 137057"
+TEX="136223 137012 386864 137056 137057 525906 525908"
 IDS=$( (grep -ohE 'sound = [0-9]+|= [0-9]{6,}, *--' Themes.lua "$MAIN" | grep -oE '[0-9]{6,}'; echo $TEX | tr ' ' '\n') | sort -un)
 fail=0; n=0
 for id in $IDS; do

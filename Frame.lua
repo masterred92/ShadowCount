@@ -12,6 +12,8 @@ local frame, db, settings, ticker
 local ICON = "Interface\\Icons\\Spell_Shadow_Twilight" -- 136223, Shadow Trance's own icon
 local BAR = "Interface\\TargetingFrame\\UI-StatusBar"
 local GRIP = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"
+local LOCKED, UNLOCKED = "Interface\\Buttons\\LockButton-Locked-Up", "Interface\\Buttons\\LockButton-Unlocked-Up" -- 525906, 525908
+local GOLD = "|cffffd100" -- labels in the game's own gold, values in white
 local BG, EDGE = "Interface\\Tooltips\\UI-Tooltip-Background", "Interface\\Tooltips\\UI-Tooltip-Border"
 local MIN_W, MIN_H, MAX_W, MAX_H = 180, 120, 480, 300
 UI.DEFAULT_POINT = { "CENTER", 0, -210 }
@@ -21,6 +23,10 @@ local function fs(parent, font)
   f:SetJustifyH("LEFT")
   return f
 end
+
+-- "Fight: " in gold, so the numbers after it are easy to pick out
+local function label(text) return GOLD .. text .. ":|r " end
+local function trances(n) return n == 1 and L["Trance"] or L["Trances"] end
 
 function UI.Place()
   local p = db.point or UI.DEFAULT_POINT
@@ -39,6 +45,13 @@ function UI.ApplyTheme(th)
   frame.head:SetTextColor(ar, ag, ab)
   frame.rule:SetColorTexture(fr, fg, fb, 0.9)
   frame.tree:SetText(th.tree or "")
+end
+
+-- Padlock icon and resize grip follow the lock setting.
+function UI.UpdateLock()
+  if not frame then return end
+  frame.lock.icon:SetTexture(settings.locked and LOCKED or UNLOCKED)
+  frame.grip:SetShown(not settings.locked)
 end
 
 function UI.ApplyLayout()
@@ -78,8 +91,28 @@ function UI.Build(database, s)
   frame.title = fs(frame, "GameFontNormal")
   frame.title:SetPoint("LEFT", icon, "RIGHT", 5, 0)
   frame.title:SetText("Shadow Count")
+  -- padlock, top right: click to lock or unlock the box (same as the lock and unlock slash commands)
+  local lock = CreateFrame("Button", nil, frame)
+  lock:SetSize(16, 16)
+  lock:SetPoint("TOPRIGHT", -7, -8)
+  lock.icon = lock:CreateTexture(nil, "ARTWORK")
+  lock.icon:SetAllPoints()
+  lock.icon:SetTexCoord(6 / 32, 25 / 32, 7 / 32, 25 / 32) -- just the padlock, not the empty edge of the texture
+  lock:SetScript("OnClick", function()
+    settings.locked = not settings.locked
+    UI.UpdateLock()
+    Core.Print(settings.locked and L["frame locked."] or L["frame unlocked."])
+  end)
+  lock:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+    GameTooltip:SetText(settings.locked and L["Box locked"] or L["Box unlocked"])
+    GameTooltip:AddLine(settings.locked and L["Click to unlock it."] or L["Drag the box to move it. Click to lock it."], 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  lock:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  frame.lock = lock
   frame.tree = fs(frame, "GameFontDisableSmall")
-  frame.tree:SetPoint("TOPRIGHT", -9, -11)
+  frame.tree:SetPoint("RIGHT", lock, "LEFT", -2, 0)
   frame.tree:SetJustifyH("RIGHT")
   frame.title:SetPoint("RIGHT", frame.tree, "LEFT", -4, 0)
   frame.title:SetWordWrap(false)
@@ -92,7 +125,7 @@ function UI.Build(database, s)
   frame.head:SetPoint("TOPLEFT", 10, -33)
   frame.head:SetPoint("RIGHT", -10, 0)
   frame.head:SetWordWrap(false)
-  frame.lines = fs(frame)
+  frame.lines = fs(frame, "GameFontHighlight") -- 12 pt (was 10 pt)
   frame.lines:SetPoint("TOPLEFT", frame.head, "BOTTOMLEFT", 0, -4)
   frame.lines:SetPoint("RIGHT", -10, 0)
   frame.lines:SetJustifyV("TOP")
@@ -100,9 +133,10 @@ function UI.Build(database, s)
 
   frame.bar = CreateFrame("StatusBar", nil, frame)
   frame.bar:SetStatusBarTexture(BAR)
-  frame.bar:SetPoint("BOTTOMLEFT", 10, 30)
-  frame.bar:SetPoint("BOTTOMRIGHT", -10, 30)
-  frame.bar:SetHeight(10)
+  frame.bar:SetPoint("BOTTOMLEFT", 10, 29)
+  frame.bar:SetPoint("BOTTOMRIGHT", -10, 29)
+  frame.bar:SetHeight(12) -- was 10
+  frame.lines:SetPoint("BOTTOM", frame.bar, "TOP", 0, 1) -- extra lines are cut off instead of running into the bar
   frame.bar:SetMinMaxValues(0, 1)
   frame.bar:SetValue(0)
   local barBg = frame.bar:CreateTexture(nil, "BACKGROUND")
@@ -128,6 +162,7 @@ function UI.Build(database, s)
     settings.width = math.floor(frame:GetWidth() + 0.5)
     settings.height = math.floor(frame:GetHeight() + 0.5)
   end)
+  frame.grip = grip
 
   -- Trance glow: the whole box pulses violet-white while Shadow Trance is up, then clears
   frame.flash = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
@@ -139,6 +174,7 @@ function UI.Build(database, s)
   UI.ApplyLayout()
   UI.Place()
   UI.ApplyTheme(SC.theme)
+  UI.UpdateLock()
   UI.UpdateVisibility()
   UI.Refresh()
   return frame
@@ -147,11 +183,17 @@ end
 function UI.Frame() return frame end
 
 -- While the Trance is up: a steady pulse between 0.25 and 0.6 alpha. A spent bolt: one short fade.
-local pulse, fadeLeft = 0, 0
+-- The headline counts down the Trance's 10 seconds ("NIGHTFALL!  7s"), so you know how long is left to use it.
+local pulse, fadeLeft, tranceEnds, shownSecs = 0, 0, 0, nil
 local function glowTick(_, elapsed)
   if SC.tranceUp then
     pulse = pulse + elapsed
     frame.flash:SetAlpha(0.425 + 0.175 * math.sin(pulse * 6))
+    local secs = math.max(0, math.ceil(tranceEnds - C.Clock()))
+    if secs ~= shownSecs then
+      shownSecs = secs
+      frame.head:SetText(("%s  %ds"):format(L["NIGHTFALL!"], secs))
+    end
     return
   end
   fadeLeft = fadeLeft - elapsed
@@ -162,11 +204,11 @@ end
 function UI.OnTrance(up)
   if not frame then return end
   if up then
-    pulse = 0
-    frame.head:SetText(L["NIGHTFALL!"])
+    pulse, tranceEnds, shownSecs = 0, C.Clock() + SC.TRANCE_SECONDS, nil
+    frame.head:SetText(("%s  %ds"):format(L["NIGHTFALL!"], SC.TRANCE_SECONDS))
     frame.flash:SetAlpha(0.6)
     frame:SetScript("OnUpdate", glowTick)
-  elseif frame.head:GetText() == L["NIGHTFALL!"] then
+  elseif (frame.head:GetText() or ""):find(L["NIGHTFALL!"], 1, true) then
     frame.head:SetText(L["Trance faded"])
     fadeLeft = 0
   end
@@ -183,7 +225,10 @@ function UI.OnSpent()
 end
 
 function UI.OnCombat(inCombat)
-  if frame then frame.reset:SetShown(not inCombat) end -- no Reset button in combat
+  if frame then
+    frame.reset:SetShown(not inCombat) -- no Reset button in combat
+    if inCombat and not SC.tranceUp then frame.head:SetText(L["Waiting for Nightfall..."]) end -- a fresh headline for each fight
+  end
   if inCombat and not ticker then
     ticker = C_Timer.NewTicker(0.5, function() Core.SafeCall("live", UI.RenderLive) end)
   elseif not inCombat and ticker then
@@ -192,19 +237,29 @@ function UI.OnCombat(inCombat)
   UI.Refresh()
 end
 
--- Plain-number view (out of combat): last fight + session.
+-- Plain-number view (out of combat): last fight + session, one short line each. Labels gold, numbers white.
 function UI.Lines()
   local f, s = SC.lastFight, SC.SessionStats() or {}
+  local countOnly = db and db.meterSplits == false
+  if not f and (s.gained or 0) == 0 and (s.fights or 0) == 0 and SC.fight.gained == 0 then
+    return { L["No fights yet."], "|cffaaaaaa" .. L["Fight with Nightfall talented and the Trances show up here."] .. "|r" }
+  end
   local out = {}
   local cur = f or SC.fight
-  out[#out + 1] = ("%s: %d %s, %d %s"):format(L["Fight"], cur.gained, L["Trances"], cur.spent, L["instant bolts"])
+  out[#out + 1] = label(L["Fight"]) .. ("%d %s · %d %s"):format(cur.gained, trances(cur.gained), cur.spent, L["instant"])
   if f and f.sb then
-    out[#out + 1] = ("%s: %s (%s), %s %s%s"):format(L["Shadow Bolt"], SC.Short(f.sb), SC.Pct(f.share), L["avg"],
-      f.avg and SC.Short(f.avg) or "-", f.record and ("  |cffffd200" .. L["new best!"] .. "|r") or "")
+    -- a record shows "new best!" instead of the average (the new best is on the "Avg bolt" line below)
+    out[#out + 1] = label(L["Shadow Bolt"]) .. ("%s · %s"):format(SC.Short(f.sb), SC.Pct(f.share))
+      .. (f.record and ("  |cffffd200" .. L["new best!"] .. "|r") or (" · %s %s"):format(L["avg"], f.avg and SC.Short(f.avg) or "-"))
   end
-  out[#out + 1] = ("%s: %d %s, %d %s (%s)"):format(L["Session"], s.gained or 0, L["Trances"], s.spent or 0, L["instant"], SC.Pct(s.share))
-  out[#out + 1] = ("%s: %s   %s: %s"):format(L["Avg bolt"], s.avg and SC.Short(s.avg) or "-", L["Best avg"], (s.bestAvg or 0) > 0 and SC.Short(s.bestAvg) or "-")
-  if db and db.meterSplits == false then out[#out + 1] = "|cffaaaaaa" .. L["No Shadow Bolt meter line: counting procs only."] .. "|r" end
+  if countOnly then
+    out[#out + 1] = label(L["Session"]) .. ("%d %s · %d %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"])
+    out[#out + 1] = "|cffaaaaaa" .. L["No Shadow Bolt meter line: counting procs only."] .. "|r"
+  else
+    out[#out + 1] = label(L["Session"]) .. ("%d %s · %d %s · %s"):format(s.gained or 0, trances(s.gained or 0), s.spent or 0, L["instant"], SC.Pct(s.share))
+    out[#out + 1] = label(L["Avg bolt"]) .. ("%s · %s %s"):format(s.avg and SC.Short(s.avg) or "-", L["best"],
+      (s.bestAvg or 0) > 0 and SC.Short(s.bestAvg) or "-")
+  end
   return out
 end
 
@@ -224,11 +279,11 @@ end
 function UI.RenderLive()
   if not frame then return end
   local f = SC.fight
-  local head = ("%s: %d %s, %d %s"):format(L["Fight"], f.gained, L["Trances"], f.spent, L["instant"])
+  local head = label(L["Fight"]) .. ("%d %s · %d %s"):format(f.gained, trances(f.gained), f.spent, L["instant"])
   local src = SC.LiveSource and SC.LiveSource()
   local total = src and src.totalAmount
   if total ~= nil and AbbreviateNumbers then
-    frame.lines:SetFormattedText("%s\n%s: %s\n%s", head, L["You"], AbbreviateNumbers(total), L["Shadow Bolt share after combat"])
+    frame.lines:SetFormattedText("%s\n%s%s\n|cffaaaaaa%s|r", head, label(L["You"]), AbbreviateNumbers(total), L["Shadow Bolt share after combat"])
   else
     frame.lines:SetText(head)
   end
@@ -253,8 +308,8 @@ SlashCmdList.KENNYSHADOWCOUNT = function(msg)
     if not SC.ClassMatches() then Core.Print(L["this box only shows on a Warlock."]) end
     UI.UpdateVisibility(); UI.Refresh()
   elseif cmd == "hide" then settings.shown = false; UI.UpdateVisibility()
-  elseif cmd == "lock" then settings.locked = true; Core.Print(L["frame locked."])
-  elseif cmd == "unlock" then settings.locked = false; Core.Print(L["frame unlocked."])
+  elseif cmd == "lock" then settings.locked = true; UI.UpdateLock(); Core.Print(L["frame locked."])
+  elseif cmd == "unlock" then settings.locked = false; UI.UpdateLock(); Core.Print(L["frame unlocked."])
   elseif cmd == "resetpos" then
     db.point = nil; settings.width, settings.height, settings.scale = SC.DEFAULTS.width, SC.DEFAULTS.height, 1
     UI.ApplyLayout(); UI.Place(); Core.Print(L["frame moved back to its default spot and size."])
