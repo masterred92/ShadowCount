@@ -2,7 +2,7 @@
 ## Title: Shadow Count
 ## Notes: Nightfall counter for Warlocks: flashes NIGHTFALL! while Shadow Trance is up, counts Trances gained and instant Shadow Bolts spent, then Shadow Bolt damage, share and average from the game's own damage meter. Blizzard sounds and textures only.
 ## Author: Kenny
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: KennyShadowCountDB
 ## X-License: MIT
 ## IconTexture: Interface\Icons\Spell_Shadow_Twilight

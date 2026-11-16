@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+- Trance detection now adapts to what the client allows. In combat the game can hide buff data from addons, so Shadow Count checks at runtime whether Shadow Trance is readable or appears as a cast event. When neither is available it no longer treats a hidden buff as "Trance ended": gains show as unknown, and instant Shadow Bolts are still counted.
+- The `NIGHTFALL!` glow and 10-second countdown only start when a Trance is actually detected, and stop the moment it's spent.
+- This should work on WoW: Forever. Confirmation in real fights will come from players, so please report what `/shc debug` shows if something looks off.
+- Interface polish: clearer layout and text.
+
 ## 1.0.0
 - First release for WoW: Forever (Interface 16001, client 1.60.1).
 - `NIGHTFALL!` and a violet-white glow over the whole box while Shadow Trance is up; clears when the bolt is spent or the Trance runs out.

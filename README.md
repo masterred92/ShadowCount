@@ -1,20 +1,20 @@
 <p align="center"><img src="media/screenshots/mockup.png" alt="Shadow Count layout" width="640"></p>
 
-# Shadow Count (WoW: Forever) v1.0.0
+# Shadow Count (WoW: Forever) v1.0.1
 
 [![Tests](https://github.com/masterred92/ShadowCount/actions/workflows/tests.yml/badge.svg)](https://github.com/masterred92/ShadowCount/actions/workflows/tests.yml) [![WoW: Forever](https://img.shields.io/badge/WoW%3A%20Forever-Interface%2016001-c8a165)](https://github.com/masterred92/ShadowCount/blob/main/ShadowCount.toc) [![License: MIT](https://img.shields.io/github/license/masterred92/ShadowCount)](https://github.com/masterred92/ShadowCount/blob/main/LICENSE)
 
-A Nightfall counter for Warlocks. A small shadow-purple box glows and shows **NIGHTFALL!** while Shadow Trance is up, and counts how many Trances you got and how many you spent on an instant Shadow Bolt. When the fight ends it shows Shadow Bolt's damage, its share of your damage and the average per bolt, taken from the game's own damage meter.
+A Nightfall counter for Warlocks. A small shadow-purple box counts the Shadow Bolts you cast instantly from a Trance and, when the game lets addons see it, shows **NIGHTFALL!** while Shadow Trance is up and counts the Trances you gain. When the fight ends it shows Shadow Bolt's damage, its share of your damage and the average per bolt, taken from the game's own damage meter.
 
 ## What it shows
-- **While Shadow Trance is up:** `NIGHTFALL!` and a violet-white glow over the whole box. It clears when you spend it (`INSTANT SHADOW BOLT!`) or when the Trance runs out.
+- **While Shadow Trance is up (when the game shows it to addons):** `NIGHTFALL!` and a violet-white glow over the whole box. It clears when you spend it (`INSTANT SHADOW BOLT!`) or when the Trance runs out.
 - **This fight:** Trances gained and instant Shadow Bolts spent; after combat, Shadow Bolt damage, share and average per bolt.
 - **This session:** Trances, instant bolts, Shadow Bolt share, average per bolt and your best fight average. The **Reset session** button starts a new session (it hides during combat).
 - **Share bar:** Shadow Bolt's share of your damage.
 
 ## Where the numbers come from
 WoW: Forever runs on the modern client, which gives addons **no combat log**, and every single hit's damage reaches addons as a hidden ("secret") value. Shadow Count never guesses a number:
-- **Trances** are exact: Shadow Trance is its own game spell (17941), and the game tells addons when you gain it.
+- **Trances gained:** Shadow Trance is its own game spell (17941). In combat the game can hide buffs from addons, so Shadow Count checks at runtime whether it may read this one or sees it as a cast. If it can't, it doesn't guess: gains show as unknown, no `NIGHTFALL!` or countdown appears, and only instant bolts are counted. `/shc debug` shows which mode it's in.
 - **Instant bolts:** a Shadow Bolt that goes off while the Trance is up with no cast bar. A bolt you were already casting when the Trance landed does not count.
 - **Damage** comes from **Blizzard's built-in damage meter**, worked out once combat ends (all Shadow Bolt ranks together).
 - If the meter has no Shadow Bolt line, the box says **"counting procs only"**. `/shc meter` lists the meter's lines for your last fight.
@@ -23,7 +23,7 @@ WoW: Forever runs on the modern client, which gives addons **no combat log**, an
 Turn on the game's meter if the box shows no damage: **Options > Gameplay > Advanced > Damage Meter > Enable Damage Meter**.
 
 ## Sound
-`/shc sound every` (default): the game's own dark Shadow Trance alert on every Nightfall. `/shc sound record`: when a fight beats your best average per bolt. `/shc sound off`.
+`/shc sound every` (default): the game's own dark Shadow Trance alert on every detected Nightfall. `/shc sound record`: when a fight beats your best average per bolt. `/shc sound off`.
 `/shc soundfile theme|trance|shadow|curse` picks the sound and plays it once. All sounds are built into the game.
 
 ## Download
