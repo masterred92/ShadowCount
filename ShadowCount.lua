@@ -36,7 +36,6 @@ local DEDUPE = 0.25 -- seconds: the 17941 cast event and its aura appearing are 
 
 SC.TRANCE = 17941
 SC.TRANCE_SECONDS = 10
-SC.NIGHTFALL = 18094
 SC.BOLTS = { [686] = 1, [695] = 2, [705] = 3, [1088] = 4, [1106] = 5, [7641] = 6, [11659] = 7, [11660] = 8, [11661] = 9, [25307] = 10 }
 
 -- Built-in sound files (FileDataIDs, from the community listfile; checked by tools/verify_media.sh). No bundled audio.
