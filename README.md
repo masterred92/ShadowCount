@@ -1,6 +1,6 @@
 <p align="center"><img src="media/screenshots/mockup.png" alt="Shadow Count layout" width="640"></p>
 
-# Shadow Count (WoW: Forever) v1.0.1
+# Shadow Count (WoW: Forever) v1.1.0
 
 [![Tests](https://github.com/masterred92/ShadowCount/actions/workflows/tests.yml/badge.svg)](https://github.com/masterred92/ShadowCount/actions/workflows/tests.yml) [![WoW: Forever](https://img.shields.io/badge/WoW%3A%20Forever-Interface%2016001-c8a165)](https://github.com/masterred92/ShadowCount/blob/main/ShadowCount.toc) [![License: MIT](https://img.shields.io/github/license/masterred92/ShadowCount)](https://github.com/masterred92/ShadowCount/blob/main/LICENSE)
 
@@ -10,7 +10,13 @@ A Nightfall counter for Warlocks. A small shadow-purple box counts the Shadow Bo
 - **While Shadow Trance is up (when the game shows it to addons):** `NIGHTFALL!` and a violet-white glow over the whole box. It clears when you spend it (`INSTANT SHADOW BOLT!`) or when the Trance runs out.
 - **This fight:** Trances gained and instant Shadow Bolts spent; after combat, Shadow Bolt damage, share and average per bolt.
 - **This session:** Trances, instant bolts, Shadow Bolt share, average per bolt and your best fight average. The **Reset session** button starts a new session (it hides during combat).
-- **Share bar:** Shadow Bolt's share of your damage.
+- **Share bar:** Shadow Bolt's share of your damage. While a detected Trance is up it becomes a violet-white bar that drains over the Trance's 10 seconds (`NIGHTFALL! 6.2s`), then switches back. It never counts down a Trance the game hides from addons.
+
+## Box options
+- **Idle fade** (on by default, `/shc fade`): out of combat the box rests at 35% alpha; it comes back to full in combat, under the mouse, while a Trance is up and during `/shc test`.
+- **Compact mode** (off by default, `/shc compact`): a slim strip with just the headline, the instant-bolt count and the bar. Your full size is kept for when you switch back.
+- **Click-through when locked** (off by default, `/shc clickthrough`): while the box is locked, clicks pass through it. The padlock can't be clicked then, so type `/shc unlock` or `/shc clickthrough` to click the box again.
+- **Right-click menu** (out of combat): sound mode, sound file, idle fade, compact mode, lock, click-through, test preview, reset session and reset position. `/shc menu` opens it too.
 
 ## Where the numbers come from
 WoW: Forever runs on the modern client, which gives addons **no combat log**, and every single hit's damage reaches addons as a hidden ("secret") value. Shadow Count never guesses a number:
@@ -34,7 +40,7 @@ Turn on the game's meter if the box shows no damage: **Options > Gameplay > Adva
 
 ## Commands
 Main command `/shc`; `/shadowcount` works too.
-`/shc show` / `hide` · `lock` / `unlock` · `resetpos` · `scale 0.5-2` · `size <width> <height>` · `reset` (session) · `test` (preview out of combat) · `sound …` · `soundfile …` · `theme` (re-check your talents) · `meter` · `debug` · `report`
+`/shc show` / `hide` · `lock` / `unlock` · `resetpos` · `scale 0.5-2` · `size <width> <height>` · `reset` (session) · `test` (10-second preview out of combat) · `fade` · `compact` · `clickthrough` · `menu` · `sound …` · `soundfile …` · `theme` (re-check your talents) · `meter` · `debug` · `report`
 
 The box only appears on a Warlock. Move it by dragging; resize it with the corner grip. Both stop working while it is locked.
 
@@ -49,7 +55,10 @@ The box only appears on a Warlock. Move it by dragging; resize it with the corne
 3. Cast Shadow Bolt during the Trance: `INSTANT SHADOW BOLT!`, the glow clears and the instant count goes up. Let one run out: the glow clears without counting.
 4. After the fight: Shadow Bolt damage, share and average appear, or "counting procs only". `/shc meter` lists the meter lines.
 5. **Reset session** sets the session line back to 0 and is hidden in combat.
-6. No Lua errors and no "action blocked" messages during combat.
+6. Out of combat the box fades to 35% and comes back under the mouse, in combat and during `/shc test` (the bar drains for 10 seconds). `/shc fade` turns the fade off.
+7. Right-click the box out of combat: the quick menu opens and each entry works. In combat it does not open.
+8. `/shc compact` gives a slim strip; switching it off brings back your size. With `/shc clickthrough` on and the box locked, clicks go through it; `/shc unlock` makes it clickable again.
+9. No Lua errors and no "action blocked" messages during combat.
 
 ## Licence
 MIT. Written from scratch; no code copied from other addons.

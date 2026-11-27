@@ -31,7 +31,7 @@ local SC = {}
 KennyShadowCount = SC
 ns.SC = SC
 
-local SCHEMA = 1
+local SCHEMA = 2 -- 2 = 1.1.0: fade, compact and clickThrough settings
 local DEDUPE = 0.25 -- seconds: the 17941 cast event and its aura appearing are one gain, not two
 
 SC.TRANCE = 17941
@@ -48,10 +48,24 @@ SC.SOUND_MODES = { every = true, record = true, off = true }
 
 SC.DEFAULTS = {
   shown = true, locked = false, scale = 1, width = 240, height = 160, sound = "every", soundFile = "theme", -- 160 tall: room for four 12 pt lines
+  fade = true,         -- 1.1.0: out of combat the box rests at 35% alpha (full in combat, on hover, during a Trance or the test)
+  compact = false,     -- 1.1.0: one slim strip (headline, instant count, bar); width and height above stay the full size
+  clickThrough = false, -- 1.1.0: while locked, clicks pass through the box (/shc unlock or /shc clickthrough gives them back)
 }
+SC.BOOL_SETTINGS = { "shown", "locked", "fade", "compact", "clickThrough" }
 
 local db, settings
 local migrations = {} -- schema 1 is the first release
+-- 1.0.x -> 1.1.0: settings keep everything already saved (size, spot, sounds); the three new switches start at their
+-- defaults. Anything that isn't a true/false where one belongs (a hand-edited file) is dropped, so the default applies.
+migrations[2] = function(d)
+  d.settings = type(d.settings) == "table" and d.settings or {}
+  for _, k in ipairs(SC.BOOL_SETTINGS) do
+    if d.settings[k] ~= nil and type(d.settings[k]) ~= "boolean" then d.settings[k] = nil end
+  end
+  return d
+end
+SC.migrations = migrations
 
 local function now() return C.Clock() end
 
